@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <malloc.h>
 #include "fileManager.h"
+#define BMP_TYPE 0x4d42
+#define BMP_SIZE 40
+
 #pragma pack(push, 1)
 
 struct bmp_header{
@@ -23,6 +26,8 @@ struct bmp_header{
 }bmpHeader;
 #pragma pack(pop)
 
+const uint8_t trash_byte = 0;
+
 struct pixel { uint8_t b, g, r; }pixel;
 
 struct image {
@@ -33,9 +38,12 @@ struct image {
 
 static int calculate(int width){
     return (3 * width + 3) & (-4);
+}//(4 - width * 3 % 4) % 4;
+
+static size_t calculate_padding(const uint64_t width) {
+    return (4 - width * 3 % 4) % 4;
 }
 static struct image readBMP(const char* path) {
-    unsigned char** value;
     char *c;
     int i;
     FILE* file = openReadFile(path);
@@ -46,83 +54,84 @@ static struct image readBMP(const char* path) {
     uint64_t pix = trueWidth*height/3;
     struct pixel * data = (struct pixel *) malloc(pix * sizeof(struct pixel));
     c = (char *)data;
-    int k = 0;
     while ((i= getc(file))!=EOF){
         *c = i;
         c++;
-        k += 1;
     }
-
     struct image img = {width, height, data};
-
     closeFile(file);
     return img;
 }
 
-static struct image rotate(struct image img){
-
-
+static struct bmp_header bmp_header_init(const uint64_t width, const uint64_t height) {
+    const size_t padding = calculate_padding(width);
+    const uint32_t bOffBits = 54;
+    return (struct bmp_header) {
+            .biWidth = width,
+            .biHeight = height,
+            .bfileSize = bOffBits + height * (width + padding) * 3 + padding,
+            .biSizeImage = width * height * 3,
+            .bfType = BMP_TYPE,
+            .bfReserved = 0,
+            .bOffBits = bOffBits,
+            .biSize = BMP_SIZE,
+            .biPlanes = 1,
+            .biBitCount = 24,
+            .biCompression = 0,
+            .biXPelsPerMeter = 0,
+            .biYPelsPerMeter = 0,
+            .biClrUsed = 0,
+            .biClrImportant = 0
+    };
 
 }
 
+static struct image imageNewStruct(const struct image* img) {
+    return (struct image) {
+            .width = img->height,
+            .height = img->width,
+            .data = malloc(img->height * img->width * sizeof(struct pixel))
+    };
+}
+static uint64_t calculateNewAddress(const struct image* img, uint64_t i, uint64_t j) {
+    return img->height - i + 1 + j * img->height;
+}
 
-/*
-     * int[][] b = new int[a.length][a.length];
-        for (int i = 0; i < b.length; i++) {
-            for (int j = 0; j < b.length; j++) {
-                b[j][i] = a[a.length - i - 1][j];
-            }
+struct image image_rotate(const struct image img) {
+    struct image newImage = imageNewStruct(&img);
+
+    for (uint64_t i = 0; i < img.height; i++) {
+
+        for (uint64_t j = 0; j < img.width; j++) {
+            newImage.data[calculateNewAddress(&img, i, j)] =
+                    img.data[i * img.width + j];
         }
-     */
-
-/*unsigned char* rotate(const struct bmp_header* head, unsigned char** img) {
-    unsigned char** newimg;
-    int width = bmpHeader.biWidth;
-    int height = bmpHeader.biHeight;
-    int trueWidth = calculate(width);
-
-    //newimg = (unsigned char **)malloc(height*sizeof(trueWidth));
-    newimg = img;
-    for(int i = 0; i < height; i++) {
-        newimg[i] = (unsigned char *)malloc(trueWidth*sizeof(char));
-        for (int j = 0; j < trueWidth; j+=3){}
-
     }
-    return  newimg;
-}*/
+
+    return newImage;
+}
+
+
+
 
 static int saveBMP(const char* path, struct image  img) {
     FILE* file = openWriteFile(path) ;
-    char *c;
     uint64_t width = img.width;
     uint64_t height = img.height;
-    uint64_t trueWidth = calculate(width);
-    uint64_t pix = trueWidth*height/3;
-    fwrite(&bmpHeader, sizeof(bmpHeader), 1, file);
 
-    int size = pix * sizeof(struct pixel);
+    const struct bmp_header header = bmp_header_init(width, height);
+    fwrite(&header, sizeof(bmpHeader), 1, file);
+    const size_t padding = calculate_padding(img.width);
 
-    c = (char *)&pix;
-    for (int i = 0; i<sizeof(int); i++)
-    {
-        putc(*c++, file);
+    for (size_t i = 0; i < height; i++) {
+        fwrite(&(img.data[i * width]), sizeof(struct pixel), width, file);
+        fwrite(&trash_byte, sizeof(trash_byte), padding, file);
     }
-
-    c = (char *)img.data;
-    for (int i = 0; i < size; i++)
-    {
-        putc(*c, file);
-        c++;
-    }
-
-
     closeFile(file);
     return 1;
 }
 
-
-
 int rotateImage(const char* filepath, const char* resPath){
-    struct image img = readBMP(filepath);
+    struct image img = image_rotate(readBMP(filepath));
     saveBMP(resPath, img);
 }
